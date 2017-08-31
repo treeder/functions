@@ -1,12 +1,8 @@
-# This is the IronFunctions API spec
-# If you make changes here, remember to run `go generate` in api/models/ and
-# api/server to make sure you use the changes.
-
 swagger: '2.0'
 info:
-  title: IronFunctions
+  title: fn
   description: The open source serverless platform.
-  version: "0.1.29"
+  version: "0.2.0"
 # the domain of the service
 host: "127.0.0.1:8080"
 # array of all schemes that your API supports
@@ -20,16 +16,6 @@ consumes:
 produces:
   - application/json
 paths:
-  /version:
-    get:
-      summary: "Get daemon version."
-      tags:
-        - Version
-      responses:
-        200:
-          description: Daemon version.
-          schema:
-            $ref: '#/definitions/Version'
   /apps:
     get:
       summary: "Get all app names."
@@ -161,7 +147,7 @@ paths:
   /apps/{app}/routes:
     post:
       summary: Create new Route
-      description: Create a new route in an app, if app doesn't exists, it creates the app
+      description: Create a new route in an app, if app doesn't exists, it creates the app. Post does not skip validation of zero values.
       tags:
         - Routes
       parameters:
@@ -220,8 +206,43 @@ paths:
             $ref: '#/definitions/Error'
 
   /apps/{app}/routes/{route}:
+    put:
+      summary: Create a Route if it does not exist. Update if it does. Will also create app if it does not exist. Put does not skip validation of zero values
+      description: Update or Create a route
+      tags:
+        - Routes
+      parameters:
+        - name: app
+          in: path
+          description: name of the app.
+          required: true
+          type: string
+        - name: route
+          in: path
+          description: route path.
+          required: true
+          type: string
+        - name: body
+          in: body
+          description: One route to post.
+          required: true
+          schema:
+            $ref: '#/definitions/RouteWrapper'
+      responses:
+        200:
+          description: Route created or updated
+          schema:
+            $ref: '#/definitions/RouteWrapper'
+        400:
+          description: Invalid route due to parameters being missing or invalid.
+          schema:
+            $ref: '#/definitions/Error'
+        default:
+          description: Unexpected error
+          schema:
+            $ref: '#/definitions/Error'
     patch:
-      summary: Update a Route
+      summary: Update a Route, Fails if the route or app does not exist. Accepts partial updates / skips validation of zero values.
       description: Update a route
       tags:
         - Routes
@@ -252,7 +273,7 @@ paths:
           schema:
             $ref: '#/definitions/Error'
         404:
-          description: App does not exist.
+          description: App / Route does not exist.
           schema:
             $ref: '#/definitions/Error'
         default:
@@ -317,22 +338,115 @@ paths:
           schema:
             $ref: '#/definitions/Error'
 
-  /tasks:
+  /apps/{app}/calls/{call}/log:
     get:
-      summary: Get next task.
-      description: Gets the next task in the queue, ready for processing. Consumers should start processing tasks in order. No other consumer can retrieve this task.
+      summary: Get call logs
+      description: Get call logs
       tags:
-        - Tasks
+        - Call
+        - Log
+      parameters:
+        - name: app
+          description: App Name
+          required: true
+          type: string
+          in: path
+        - name: call
+          description: Call ID.
+          required: true
+          type: string
+          in: path
       responses:
         200:
-          description: Task information
+          description: Log found
           schema:
-            $ref:  '#/definitions/TaskWrapper'
+            $ref:  '#/definitions/LogWrapper'
+        404:
+          description: Log not found.
+          schema:
+            $ref: '#/definitions/Error'
+    delete:
+      summary: Delete call log entry
+      description: Delete call log entry
+      tags:
+         - Call
+         - Log
+      parameters:
+        - name: call
+          description: Call ID.
+          required: true
+          type: string
+          in: path
+        - name: app
+          description: App name.
+          required: true
+          type: string
+          in: path
+      responses:
+        202:
+          description: Log delete request accepted
+        404:
+          description: Does not exist.
+          schema:
+            $ref: '#/definitions/Error'
         default:
           description: Unexpected error
           schema:
             $ref: '#/definitions/Error'
 
+  /apps/{app}/calls/{call}:
+    get:
+      summary: Get call information
+      description: Get call information
+      tags:
+        - Call
+      parameters:
+        - name: app
+          description: app name
+          required: true
+          type: string
+          in: path
+        - name: call
+          description: Call ID.
+          required: true
+          type: string
+          in: path
+      responses:
+        200:
+          description: Call found
+          schema:
+            $ref:  '#/definitions/CallWrapper'
+        404:
+          description: Call not found.
+          schema:
+            $ref: '#/definitions/Error'
+
+  /apps/{app}/calls:
+    get:
+      summary: Get app-bound calls.
+      description: Get app-bound calls can filter to route-bound calls.
+      tags:
+        - Call
+      parameters:
+        - name: app
+          description: App name.
+          required: true
+          type: string
+          in: path
+        - name: route
+          description: App route.
+          required: false
+          type: string
+          in: query
+      responses:
+        200:
+          description: Calls found
+          schema:
+            $ref:  '#/definitions/CallsWrapper'
+        404:
+          description: Calls not found.
+          schema:
+            $ref: '#/definitions/Error'
 
 definitions:
   Route:
@@ -354,23 +468,21 @@ definitions:
             type: string
       memory:
         type: integer
-        format: int64
+        format: uint64
         description: Max usable memory for this route (MiB).
       type:
         enum:
           - sync
           - async
         description: Route type
+        type: string
       format:
         enum:
           - default
           - http
           - json
         description: Payload format sent into function.
-      max_concurrency:
-        type: integer
-        format: int32
-        description: Maximum number of hot functions concurrency
+        type: string
       config:
         type: object
         description: Route configuration - overrides application configuration
@@ -379,10 +491,12 @@ definitions:
       timeout:
         type: integer
         default: 30
+        format: int32
         description: Timeout for executions of this route. Value in Seconds
       idle_timeout:
         type: integer
         default: 30
+        format: int32
         description: Hot functions idle timeout before termination. Value in Seconds
 
   App:
@@ -451,59 +565,80 @@ definitions:
       error:
         $ref: '#/definitions/ErrorBody'
 
-  Task:
-    allOf:
-      - $ref: "#/definitions/NewTask"
-      - type: object
-        properties:
-          group_name:
-            type: string
-            description: "Group this task belongs to."
-            readOnly: true
-          error:
-            type: string
-            description: "The error message, if status is 'error'. This is errors due to things outside the task itself. Errors from user code will be found in the log."
-          reason:
-            type: string
-            description: |
-              Machine usable reason for task being in this state.
-              Valid values for error status are `timeout | killed | bad_exit`.
-              Valid values for cancelled status are `client_request`.
-              For everything else, this is undefined.
-            enum:
-              - timeout
-              - killed
-              - bad_exit
-              - client_request
-          created_at:
-            type: string
-            format: date-time
-            description: Time when task was submitted. Always in UTC.
-            readOnly: true
-          started_at:
-            type: string
-            format: date-time
-            description: Time when task started execution. Always in UTC.
-          completed_at:
-            type: string
-            format: date-time
-            description: Time when task completed, whether it was successul or failed. Always in UTC.
-          # We maintain a doubly linked list of the retried task to the
-          # original task.
-          retry_of:
-            type: string
-            description: If this field is set, then this task is a retry of the ID in this field.
-            readOnly: true
-          retry_at:
-            type: string
-            description: If this field is set, then this task was retried by the task referenced in this field.
-            readOnly: true
-          env_vars:
-            # this is a map: https://github.com/OAI/OpenAPI-Specification/blob/master/versions/2.0.md#model-with-mapdictionary-properties
-            type: object
-            description: Env vars for the task. Comes from the ones set on the Group.
-            additionalProperties:
-              type: string
+  CallsWrapper:
+    type: object
+    required:
+      - calls
+    properties:
+      calls:
+        type: array
+        items:
+          $ref: '#/definitions/Call'
+      error:
+        $ref: '#/definitions/ErrorBody'
+
+  CallWrapper:
+    type: object
+    required:
+      - call
+    properties:
+      call:
+        $ref: '#/definitions/Call'
+        description: "Call object."
+
+
+  LogWrapper:
+    type: object
+    required:
+      - log
+    properties:
+      log:
+        $ref: '#/definitions/Log'
+        description: "Call log entry."
+
+  Log:
+    type: object
+    properties:
+      call_id:
+        type: string
+        description: Call UUID ID
+      log:
+        type: string # maybe bytes, long logs wouldn't fit into string type
+
+  Call:
+    type: object
+    properties:
+      id:
+        type: string
+        description: Call UUID ID.
+        readOnly: true
+      status:
+        type: string
+        description: Call execution status.
+        readOnly: true
+      app_name:
+        type: string
+        description: App name that is assigned to a route that is being executed.
+        readOnly: true
+      path:
+        type: string
+        description: App route that is being executed.
+        readOnly: true
+      created_at:
+        type: string
+        format: date-time
+        description: Time when call was submitted. Always in UTC.
+        readOnly: true
+      started_at:
+        type: string
+        format: date-time
+        description: Time when call started execution. Always in UTC.
+        readOnly: true
+      completed_at:
+        type: string
+        format: date-time
+        description: Time when call completed, whether it was successul or failed. Always in UTC.
+        readOnly: true
 
   ErrorBody:
     type: object
@@ -520,26 +655,3 @@ definitions:
     properties:
       error:
         $ref: '#/definitions/ErrorBody'
-
-  NewTask:
-    type: object
-    required:
-      - image
-    properties:
-      image:
-        type: string
-        description: Name of Docker image to use. This is optional and can be used to override the image defined at the group level.
-      payload:
-        type: string
-        # 256k
-        # maxLength breaks ruby generator too: https://github.com/treeder/worker_ruby/blob/0aa9236ce5060af3f15758937712973f80dd54fe/lib/iron_titan/models/task.rb#L272
-        # maxLength: 268435456
-        description: Payload for the task. This is what you pass into each task to make it do something.
-
-  TaskWrapper:
-    type: object
-    required:
-      - task
-    properties:
-      task:
-        $ref: '#/definitions/Task'
